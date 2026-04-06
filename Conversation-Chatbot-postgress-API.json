@@ -1,0 +1,215 @@
+{
+  "name": "Conversation-Chatbot-postgress-API",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst incoming = body.sessionId || '';\nconst message = (body.chatInput || '').trim();\n\nfunction generateSessionId() {\n  const random = Math.random().toString(36).slice(2, 8);\n  return `session_${Date.now()}_${random}`;\n}\n\nlet sessionId;\nif (message === '__new_session__' || !incoming) {\n  sessionId = generateSessionId();\n} else {\n  sessionId = incoming;\n}\n\nreturn [{ json: { sessionId, chatInput: message } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -368,
+        -112
+      ],
+      "id": "992e6444-586f-4e74-970f-500ad0ac412c",
+      "name": "Session Manager"
+    },
+    {
+      "parameters": {
+        "options": {
+          "systemMessage": "You are a helpful assistant."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -144,
+        -112
+      ],
+      "id": "060ca06e-dbe7-43d7-932a-61a7fb0405bd",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -176,
+        128
+      ],
+      "id": "029abda8-aea0-4e05-aff0-ccba60c63062",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "LpDrbAPRxRGxn8kd",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Session Manager').item.json.sessionId }}",
+        "tableName": "n8n_chat_history",
+        "contextWindowLength": 20
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        -16,
+        128
+      ],
+      "id": "1ea36710-70b3-46b4-be5b-70aaf68850f6",
+      "name": "Postgres Chat Memory",
+      "credentials": {
+        "postgres": {
+          "id": "Cpdq567t9GQ5gtbp",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO chat_sessions (session_id, conversation)\nVALUES (\n  '{{ $('Session Manager').item.json.sessionId }}',\n  jsonb_build_array(\n    jsonb_build_object(\n      'turn', 1,\n      'user', '{{ $('Webhook').item.json.body.chatInput.replace(/'/g, \"''\") }}',\n      'assistant', '{{ $('AI Agent').item.json.output.replace(/'/g, \"''\") }}',\n      'timestamp', NOW()\n    )\n  )\n)\nON CONFLICT (session_id)\nDO UPDATE SET\n  conversation = chat_sessions.conversation || jsonb_build_array(\n    jsonb_build_object(\n      'turn', jsonb_array_length(chat_sessions.conversation) + 1,\n      'user', '{{ $('Webhook').item.json.body.chatInput.replace(/'/g, \"''\") }}',\n      'assistant', '{{ $('AI Agent').item.json.output.replace(/'/g, \"''\") }}',\n      'timestamp', NOW()\n    )\n  ),\n  updated_at = NOW();",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        128,
+        -112
+      ],
+      "id": "db237b2e-c747-4f02-9c26-0fc4a05eccc7",
+      "name": "Upsert Conversation",
+      "credentials": {
+        "postgres": {
+          "id": "Cpdq567t9GQ5gtbp",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chat-api",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -608,
+        -112
+      ],
+      "id": "bdbcc1d0-dcf4-4a0b-bcb6-3a7427c96026",
+      "name": "Webhook",
+      "webhookId": "3d875394-d5e3-44a4-a3f2-f088b9c4b77b"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $('AI Agent').item.json.output }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        336,
+        -112
+      ],
+      "id": "8246c2d5-4737-49c1-8276-c8c543ed776b",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Session Manager": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Upsert Conversation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Conversation": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Session Manager",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "8096d57e-0132-419e-977b-16454ba0f9f1",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "105ee48fb7c26bb472781cba876b2559cdc8c09f70f0541f9a899e8621907f9f"
+  },
+  "id": "iePuJxhWaYhtmu0m",
+  "tags": []
+}
